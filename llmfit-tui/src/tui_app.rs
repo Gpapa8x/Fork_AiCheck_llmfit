@@ -14,10 +14,37 @@ use std::sync::mpsc;
 use std::{cmp, thread};
 
 use ratatui::widgets::TableState;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::download_history::{DownloadHistory, DownloadRecord, DownloadResult};
 use crate::filter_config::FilterConfig;
 use crate::theme::Theme;
+
+fn floor_char_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn previous_grapheme_boundary(value: &str, index: usize) -> usize {
+    let index = floor_char_boundary(value, index);
+    value[..index]
+        .grapheme_indices(true)
+        .next_back()
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
+}
+
+fn next_grapheme_boundary(value: &str, index: usize) -> usize {
+    let index = floor_char_boundary(value, index);
+    value[index..]
+        .grapheme_indices(true)
+        .nth(1)
+        .map(|(idx, _)| index + idx)
+        .unwrap_or_else(|| value.len())
+}
 
 /// Messages sent from background provider-detection threads back to the main TUI.
 pub enum ProviderDetectionMsg {
@@ -1688,22 +1715,37 @@ impl App {
 
     pub fn search_input(&mut self, c: char) {
         self.search_query.insert(self.cursor_position, c);
-        self.cursor_position += 1;
+        self.cursor_position += c.len_utf8();
         self.apply_filters();
     }
 
     pub fn search_backspace(&mut self) {
         if self.cursor_position > 0 {
-            self.cursor_position -= 1;
-            self.search_query.remove(self.cursor_position);
+            let prev = previous_grapheme_boundary(&self.search_query, self.cursor_position);
+            self.search_query.drain(prev..self.cursor_position);
+            self.cursor_position = prev;
             self.apply_filters();
         }
     }
 
     pub fn search_delete(&mut self) {
         if self.cursor_position < self.search_query.len() {
-            self.search_query.remove(self.cursor_position);
+            let next = next_grapheme_boundary(&self.search_query, self.cursor_position);
+            self.search_query.drain(self.cursor_position..next);
             self.apply_filters();
+        }
+    }
+
+    pub fn search_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            self.cursor_position =
+                previous_grapheme_boundary(&self.search_query, self.cursor_position);
+        }
+    }
+
+    pub fn search_cursor_right(&mut self) {
+        if self.cursor_position < self.search_query.len() {
+            self.cursor_position = next_grapheme_boundary(&self.search_query, self.cursor_position);
         }
     }
 
@@ -4349,5 +4391,25 @@ mod tests {
         // Char not present
         assert!(!fuzzy_match("ollamax", "Ollama"));
         assert!(!fuzzy_match("z", "Anthropic"));
+    }
+
+    #[test]
+    fn search_grapheme_boundaries_keep_emoji_sequences_together() {
+        let query = "a👩‍💻b";
+        let after_a = "a".len();
+        let after_emoji = after_a + "👩‍💻".len();
+
+        assert_eq!(next_grapheme_boundary(query, after_a), after_emoji);
+        assert_eq!(previous_grapheme_boundary(query, after_emoji), after_a);
+    }
+
+    #[test]
+    fn search_grapheme_boundaries_handle_multibyte_text() {
+        let query = "a你好";
+        let after_a = "a".len();
+        let after_ni = after_a + "你".len();
+
+        assert_eq!(next_grapheme_boundary(query, after_a), after_ni);
+        assert_eq!(previous_grapheme_boundary(query, after_ni), after_a);
     }
 }

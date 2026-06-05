@@ -288,6 +288,9 @@ fn handle_search_mode(app: &mut App, key: KeyEvent) {
             app.clear_search();
         }
 
+        KeyCode::Left => app.search_cursor_left(),
+        KeyCode::Right => app.search_cursor_right(),
+
         KeyCode::Char(c) => app.search_input(c),
 
         // Allow navigation while searching

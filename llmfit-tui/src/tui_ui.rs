@@ -19,6 +19,8 @@ use crate::tui_app::{
 use llmfit_core::fit::{FitLevel, ModelFit, SortColumn};
 use llmfit_core::hardware::is_running_in_wsl;
 use llmfit_core::providers;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let tc = app.theme.colors();
@@ -285,6 +287,87 @@ fn draw_system_bar(frame: &mut Frame, app: &App, area: Rect, tc: &ThemeColors) {
     frame.render_widget(paragraph, area);
 }
 
+fn visible_search_query(query: &str, cursor_position: usize, width: usize) -> (String, u16) {
+    if width == 0 {
+        return (String::new(), 0);
+    }
+
+    let cursor_position = cursor_position.min(query.len());
+    let cursor_position = floor_grapheme_boundary(query, cursor_position);
+    let text_width = width.saturating_sub(1);
+
+    if text_width == 0 {
+        return (String::new(), 0);
+    }
+
+    if UnicodeWidthStr::width(query) <= text_width {
+        return (
+            query.to_string(),
+            UnicodeWidthStr::width(&query[..cursor_position]).min(width.saturating_sub(1)) as u16,
+        );
+    }
+
+    let graphemes: Vec<(usize, &str, usize)> = query
+        .grapheme_indices(true)
+        .map(|(idx, grapheme)| (idx, grapheme, UnicodeWidthStr::width(grapheme)))
+        .collect();
+
+    let cursor_grapheme = graphemes
+        .iter()
+        .take_while(|(idx, _, _)| *idx < cursor_position)
+        .count();
+
+    let mut start = cursor_grapheme;
+    let mut cells_before_cursor = 0;
+    while start > 0 {
+        let previous_width = graphemes[start - 1].2;
+        if cells_before_cursor + previous_width > text_width {
+            break;
+        }
+        cells_before_cursor += previous_width;
+        start -= 1;
+    }
+
+    let start_byte = graphemes.get(start).map(|(idx, _, _)| *idx).unwrap_or(0);
+    let mut end = start;
+    let mut visible_cells = 0;
+    while let Some((_, _, grapheme_width)) = graphemes.get(end) {
+        if visible_cells + grapheme_width > text_width {
+            break;
+        }
+        visible_cells += grapheme_width;
+        end += 1;
+    }
+
+    let end_byte = graphemes
+        .get(end)
+        .map(|(idx, _, _)| *idx)
+        .unwrap_or_else(|| query.len());
+    let visible = query[start_byte..end_byte].to_string();
+    let cursor_offset = UnicodeWidthStr::width(&query[start_byte..cursor_position])
+        .min(width.saturating_sub(1)) as u16;
+
+    (visible, cursor_offset)
+}
+
+fn floor_grapheme_boundary(value: &str, index: usize) -> usize {
+    let mut index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    if index == value.len() {
+        return index;
+    }
+
+    for (start, grapheme) in value.grapheme_indices(true) {
+        if start + grapheme.len() > index {
+            return start;
+        }
+    }
+
+    index
+}
+
 fn draw_search_and_filters(frame: &mut Frame, app: &App, area: Rect, tc: &ThemeColors) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -325,13 +408,17 @@ fn draw_search_and_filters(frame: &mut Frame, app: &App, area: Rect, tc: &ThemeC
         | InputMode::Benchmarks => Style::default().fg(tc.muted),
     };
 
+    let search_inner_width = chunks[0].width.saturating_sub(2) as usize;
+    let (visible_query, cursor_offset) =
+        visible_search_query(&app.search_query, app.cursor_position, search_inner_width);
+
     let search_text = if app.search_query.is_empty() && app.input_mode == InputMode::Normal {
         Line::from(Span::styled(
             "Press / to search...",
             Style::default().fg(tc.muted),
         ))
     } else {
-        Line::from(Span::styled(&app.search_query, Style::default().fg(tc.fg)))
+        Line::from(Span::styled(visible_query, Style::default().fg(tc.fg)))
     };
 
     let search_block = Block::default()
@@ -344,10 +431,7 @@ fn draw_search_and_filters(frame: &mut Frame, app: &App, area: Rect, tc: &ThemeC
     frame.render_widget(search, chunks[0]);
 
     if app.input_mode == InputMode::Search {
-        frame.set_cursor_position((
-            chunks[0].x + app.cursor_position as u16 + 1,
-            chunks[0].y + 1,
-        ));
+        frame.set_cursor_position((chunks[0].x + cursor_offset + 1, chunks[0].y + 1));
     }
 
     // Provider filter summary
@@ -5227,5 +5311,55 @@ mod tests {
         assert_eq!(truncate_str("🚀 hello", 4), "🚀 h~");
         // Exact max length — no truncation
         assert_eq!(truncate_str("abc", 3), "abc");
+    }
+
+    #[test]
+    fn visible_search_query_keeps_short_query_unchanged() {
+        assert_eq!(
+            visible_search_query("hello", 3, 10),
+            ("hello".to_string(), 3)
+        );
+    }
+
+    #[test]
+    fn visible_search_query_scrolls_to_keep_end_cursor_visible() {
+        assert_eq!(
+            visible_search_query("abcdefghijklmnopqrstuvwxyz", 26, 8),
+            ("tuvwxyz".to_string(), 7)
+        );
+    }
+
+    #[test]
+    fn visible_search_query_keeps_middle_cursor_visible() {
+        assert_eq!(
+            visible_search_query("abcdefghijklmnopqrstuvwxyz", 13, 8),
+            ("ghijklm".to_string(), 7)
+        );
+    }
+
+    #[test]
+    fn visible_search_query_handles_multibyte_cursor_boundaries() {
+        assert_eq!(
+            visible_search_query("你好世界abc", "你好世界abc".len(), 5),
+            ("abc".to_string(), 3)
+        );
+
+        assert_eq!(
+            visible_search_query("你好世界abc", 1, 5),
+            ("你好".to_string(), 0)
+        );
+    }
+
+    #[test]
+    fn visible_search_query_uses_terminal_cell_width() {
+        assert_eq!(
+            visible_search_query("ab😀cd", "ab😀cd".len(), 5),
+            ("😀cd".to_string(), 4)
+        );
+
+        assert_eq!(
+            visible_search_query("你好世界abc", "你好世界abc".len(), 6),
+            ("界abc".to_string(), 5)
+        );
     }
 }
