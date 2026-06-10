@@ -3921,7 +3921,8 @@ impl App {
             let _ = std::fs::create_dir_all(parent);
         }
         let mut installed: Vec<String> = self
-            .installed.ollama
+            .installed
+            .ollama
             .iter()
             .map(|m| m.strip_suffix(":latest").unwrap_or(m).to_string())
             .collect();
@@ -3952,7 +3953,8 @@ impl App {
 
         // Check if installed models match
         let mut installed: Vec<String> = self
-            .installed.ollama
+            .installed
+            .ollama
             .iter()
             .map(|m| m.strip_suffix(":latest").unwrap_or(m).to_string())
             .collect();
@@ -4045,7 +4047,8 @@ impl App {
         // Deduplicate: strip ":latest" suffix and remove dupes
         let mut seen = std::collections::HashSet::new();
         let mut models: Vec<String> = self
-            .installed.ollama
+            .installed
+            .ollama
             .iter()
             .map(|m| m.strip_suffix(":latest").unwrap_or(m).to_string())
             .filter(|m| seen.insert(m.clone()))

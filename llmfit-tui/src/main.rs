@@ -972,9 +972,8 @@ fn run_fit(
         .filter(|m| !backend_compatible(m, &specs))
         .count();
 
-    let mut fits = llmfit_core::analysis::build_model_fits(
-        &db, &specs, &installed, context_limit, None,
-    );
+    let mut fits =
+        llmfit_core::analysis::build_model_fits(&db, &specs, &installed, context_limit, None);
 
     if perfect {
         fits.retain(|f| f.fit_level == llmfit_core::fit::FitLevel::Perfect);
@@ -1287,9 +1286,8 @@ fn run_recommend(
 
     let installed = llmfit_core::analysis::InstalledIndex::detect_all();
 
-    let mut fits = llmfit_core::analysis::build_model_fits(
-        &db, &specs, &installed, context_limit, forced_rt,
-    );
+    let mut fits =
+        llmfit_core::analysis::build_model_fits(&db, &specs, &installed, context_limit, forced_rt);
 
     // Filter by minimum fit level
     let min_level = match min_fit.to_lowercase().as_str() {
